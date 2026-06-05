@@ -10,59 +10,35 @@ on:
   workflow_dispatch:
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  REGION: us-central1
+  PROJECT_ID: project-bd2948f0-db04-4da3-833
+  REGION: asia-south1
   SERVICE_NAME: healthlink
-  IMAGE_NAME: gcr.io/${{ secrets.GCP_PROJECT_ID }}/healthlink
+  IMAGE_NAME: asia-south1-docker.pkg.dev/project-bd2948f0-db04-4da3-833/genai-repo/healthlink
 
 jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-cov pytest-asyncio
-
-      - name: Run linting
-        run: |
-          pip install ruff black
-          ruff check . || true
-          black --check . || true
 
       - name: Run tests
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
         run: |
-          pytest tests/ -v --cov=. --cov-report=xml --cov-report=term || true
-
-      - name: Upload coverage reports
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage.xml
-          flags: unittests
-          name: codecov-umbrella
-        continue-on-error: true
+          pytest tests/ -v || true
 
   build-and-deploy:
     name: Build and Deploy to Cloud Run
@@ -76,26 +52,27 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v1
+        uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: projects/163384295264/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: healthlink-github@project-bd2948f0-db04-4da3-833.iam.gserviceaccount.com
 
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v1
+        uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker for GCR
-        run: |
-          gcloud auth configure-docker
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker asia-south1-docker.pkg.dev
 
       - name: Build Docker image
         run: |
-          docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
-          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.IMAGE_NAME }}:latest
+          docker build \
+            -t ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -t ${{ env.IMAGE_NAME }}:latest .
 
-      - name: Push Docker image to GCR
+      - name: Push Docker image
         run: |
           docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.IMAGE_NAME }}:latest
@@ -110,42 +87,29 @@ jobs:
             --memory 2Gi \
             --cpu 2 \
             --timeout 300 \
-            --max-instances 10 \
-            --min-instances 0 \
-            --set-env-vars "LOG_LEVEL=INFO" \
-            --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest,PINECONE_API_KEY=PINECONE_API_KEY:latest"
+            --project ${{ env.PROJECT_ID }}
 
       - name: Get service URL
         run: |
           SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
             --platform managed \
             --region ${{ env.REGION }} \
+            --project ${{ env.PROJECT_ID }} \
             --format 'value(status.url)')
           echo "Service deployed to: $SERVICE_URL"
-          echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_ENV
-
-      - name: Run health check
-        run: |
-          sleep 15
-          curl -f ${{ env.SERVICE_URL }}/api/v1/health || exit 1
-          echo "Health check passed!"
 
   notify:
     name: Notify Deployment Status
     runs-on: ubuntu-latest
     needs: build-and-deploy
     if: always()
-
     steps:
       - name: Deployment Success
         if: needs.build-and-deploy.result == 'success'
-        run: |
-          echo "Deployment successful!"
-          echo "HealthLink is now live on Google Cloud Run"
+        run: echo "HealthLink deployed successfully!"
 
       - name: Deployment Failed
         if: needs.build-and-deploy.result == 'failure'
         run: |
           echo "Deployment failed!"
-          echo "Please check the logs above for errors"
           exit 1

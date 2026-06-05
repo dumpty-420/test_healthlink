@@ -97,7 +97,6 @@ jobs:
             --platform managed \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
-            --set-env-vars "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }},PINECONE_API_KEY=${{ secrets.PINECONE_API_KEY }}" \
             --format 'value(status.url)')
           echo "Service deployed to: $SERVICE_URL"
 

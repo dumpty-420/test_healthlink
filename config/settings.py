@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     api_reload: bool = True
-    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:8501"]
+    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:8501", "https://healthlink-frontend-163384295264.asia-south1.run.app", "*"]
 
     # Logging Configuration
     log_level: str = "INFO"

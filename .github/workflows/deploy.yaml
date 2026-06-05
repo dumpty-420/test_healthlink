@@ -13,12 +13,13 @@ env:
   PROJECT_ID: project-bd2948f0-db04-4da3-833
   REGION: asia-south1
   SERVICE_NAME: healthlink
-  IMAGE_NAME: asia-south1-docker.pkg.dev/project-bd2948f0-db04-4da3-833/healthlink-repo/healthlink
+  IMAGE_NAME: asia-south1-docker.pkg.dev/project-bd2948f0-db04-4da3-833/genai-repo/healthlink
 
 jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -28,17 +29,30 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Run linting
+        run: |
+          pip install ruff
+          ruff check . || true
 
       - name: Run tests
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
         run: |
-          pytest tests/ -v || true
+          pytest tests/ -v --cov=. --cov-report=xml || true
 
   build-and-deploy:
     name: Build and Deploy to Cloud Run
@@ -54,7 +68,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Authenticate to Google Cloud
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: projects/163384295264/locations/global/workloadIdentityPools/github-pool/providers/github-provider
@@ -64,7 +78,8 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker asia-south1-docker.pkg.dev
+        run: |
+          gcloud auth configure-docker asia-south1-docker.pkg.dev
 
       - name: Build Docker image
         run: |
@@ -72,7 +87,7 @@ jobs:
             -t ${{ env.IMAGE_NAME }}:${{ github.sha }} \
             -t ${{ env.IMAGE_NAME }}:latest .
 
-      - name: Push Docker image
+      - name: Push Docker image to Artifact Registry
         run: |
           docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.IMAGE_NAME }}:latest
@@ -87,9 +102,9 @@ jobs:
             --memory 2Gi \
             --cpu 2 \
             --timeout 300 \
-            --port 8000 \
-            --project ${{ env.PROJECT_ID }} \
-            --set-env-vars "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }},PINECONE_API_KEY=${{ secrets.PINECONE_API_KEY }}"
+            --max-instances 10 \
+            --min-instances 0 \
+            --project ${{ env.PROJECT_ID }}
 
       - name: Get service URL
         run: |
@@ -99,19 +114,30 @@ jobs:
             --project ${{ env.PROJECT_ID }} \
             --format 'value(status.url)')
           echo "Service deployed to: $SERVICE_URL"
+          echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_ENV
+
+      - name: Run health check
+        run: |
+          sleep 15
+          curl -f ${{ env.SERVICE_URL }}/api/v1/health || exit 1
+          echo "Health check passed!"
 
   notify:
     name: Notify Deployment Status
     runs-on: ubuntu-latest
     needs: build-and-deploy
     if: always()
+
     steps:
       - name: Deployment Success
         if: needs.build-and-deploy.result == 'success'
-        run: echo "HealthLink deployed successfully!"
+        run: |
+          echo "Deployment successful!"
+          echo "HealthLink is now live on Google Cloud Run"
 
       - name: Deployment Failed
         if: needs.build-and-deploy.result == 'failure'
         run: |
           echo "Deployment failed!"
+          echo "Please check the logs above for errors"
           exit 1

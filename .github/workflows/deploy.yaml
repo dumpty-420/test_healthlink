@@ -13,7 +13,7 @@ env:
   PROJECT_ID: project-bd2948f0-db04-4da3-833
   REGION: asia-south1
   SERVICE_NAME: healthlink
-  IMAGE_NAME: asia-south1-docker.pkg.dev/project-bd2948f0-db04-4da3-833/genai-repo/healthlink
+  IMAGE_NAME: asia-south1-docker.pkg.dev/project-bd2948f0-db04-4da3-833/healthlink-repo/healthlink
 
 jobs:
   test:
